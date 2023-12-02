@@ -12,9 +12,16 @@ require_relative "work_shaper/version"
 # monotonically increasing order. If a higher offset's work is completed before a lower offset,
 # the Manager will hold the acknowledgement until all lower offsets are acknowledged. Remember,
 # work (offsets) for a given sub key are still processed in order.
-class WorkShaper
-
-
-
+module WorkShaper
+  def self.logger=(logger)
+    @logger = logger
+  end
+  def self.logger
+    @logger ||= Logger.new(
+      $stdout,
+      level: ENV['LOG_LEVEL'] || 'DEBUG',
+      formatter: Ruby::JSONFormatter::Base.new
+    )
+  end
 end
 

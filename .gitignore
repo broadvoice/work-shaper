@@ -1,5 +1,7 @@
 *.gem
 *.rbc
+Gemfile.lock
+/.idea/
 /.config
 /coverage/
 /InstalledFiles

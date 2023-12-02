@@ -15,7 +15,8 @@ module WorkShaper
     #   error is encountered.
     # @param max_in_queue [Integer] The maximum in flight jobs per Sub Key. This affects how many
     #   message could get replayed if your process crashes before the offsets are committed.
-    def initialize(work, on_done, ack, on_error, max_in_queue = 3)
+    def initialize(work:, on_done:, ack:, on_error:, max_in_queue: 3,
+                   heartbeat_period_sec: 60, offset_commit_period_ms: 5)
       @work = work
       @on_done = on_done
       @ack = ack
@@ -33,11 +34,10 @@ module WorkShaper
       @heartbeat = Thread.new do
         while true
           report
-          sleep 15
+          sleep heartbeat_period_sec
         end
       rescue => e
-        puts 'Shutdown from Heartbeat'
-        puts e
+        WorkShaper.logger.warn({ message: 'Shutdown from Heartbeat', error: e })
         shutdown
       end
 
@@ -46,12 +46,10 @@ module WorkShaper
           @completed_offsets.each_key do |partition|
             offset_ack(partition)
           end
-          sleep 0.005
-          # puts "ack loop" if Random.rand < 0.01
+          sleep offset_commit_period_ms / 1000.0
         end
       rescue => e
-        puts 'Shutdown from Offset Manager'
-        puts e
+        WorkShaper.logger.warn({ message: 'Shutdown from Offset Manager', error: e })
         shutdown
       end
     end
@@ -96,14 +94,20 @@ module WorkShaper
     # Output state of Last Acked and Pending Offset Ack's.
     def report(detailed: false)
       @semaphore.synchronize do
-        puts "Total Enqueued: #{@total_enqueued}"
-        puts "Total Acked: #{@total_acked}"
-        puts "In flight: #{@total_enqueued.to_i - @total_acked.to_i}"
-        puts "Last Ack'd Offsets: #{@last_ack}"
-        puts "Worker Count: #{@workers.keys.count}"
+        WorkShaper.logger.info(
+          { message: 'Reporting', total_enqueued: @total_enqueued,
+            total_acked: @total_acked,
+            in_flight: (@total_enqueued.to_i - @total_acked.to_i),
+            last_acked_offsets: @last_ack,
+            worker_count: @workers.keys.count
+          })
         if detailed
-          puts "Pending Ack: #{@completed_offsets}"
-          puts "Received: #{@received_offsets}"
+          WorkShaper.logger.info(
+            {
+              messaage: 'Reporting - Extra Detail',
+              pending_ack: @completed_offsets,
+              received_offsets: @received_offsets
+            })
         end
       end
     end
@@ -138,12 +142,19 @@ module WorkShaper
         # know it has already been committed.
         last_offset = @last_ack[partition]
         if last_offset && offset <= last_offset
-          puts "Received Duplicate #{partition}:#{offset}"
+          WorkShaper.logger.warn(
+            { message: 'Received Dupilcate Offset',
+              offset: "#{partition}:#{offset}"
+            })
         else
           result = @ack.call(partition, offset)
           if result.is_a? Exception
-            puts @completed_offsets[partition].to_a[0..10].join(',')
-            puts @received_offsets[partition].to_a[0..10].join(',')
+            WorkShaper.logger.warn(
+              { message: 'Failed to Ack Offset, likely re-balance',
+                offset: "#{partition}:#{offset}",
+                completed: @completed_offsets[partition].to_a[0..10].join(','),
+                received: @received_offsets[partition].to_a[0..10].join(',')
+              })
           else
             @total_acked += 1
             @last_ack[partition] = offset
@@ -154,11 +165,6 @@ module WorkShaper
         received.delete(offset)
 
         offset = completed.first
-        if result.is_a? Exception
-          puts result.message
-          # raise result
-        end
-        # raise result if result.is_a? Exception
       end
     end
 

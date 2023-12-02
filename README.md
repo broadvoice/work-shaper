@@ -1,8 +1,15 @@
 # WorkShaper
 
-TODO: Delete this and the text below, and describe your gem
+WorkShaper is inspired by Kafka partitions and offsets, but could be used to organize and
+parallelize other forms of work. The original goal was to parallelize processing offsets in
+a given partition while maintaining order for a subset of the messages based on Sub Keys.
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/work_shaper`. To experiment with that code, run `bin/console` for an interactive prompt.
+The key concepts include Sub Key, Partition, and Offset. Work on a given Sub Key must be
+executed in the order in which it is enqueued. However, work on different Sub Keys can run
+in parallel. All Work (offsets) on a given Partition must be Acknowledged in continuous
+monotonically increasing order. If a higher offset's work is completed before a lower offset,
+the Manager will hold the acknowledgement until all lower offsets are acknowledged. Remember,
+work (offsets) for a given sub key are still processed in order.
 
 ## Installation
 
@@ -18,17 +25,67 @@ If bundler is not being used to manage dependencies, install the gem by executin
 
 ## Usage
 
-TODO: Write usage instructions here
+### Example
+
+```ruby
+consumer = MyRdKafka.consumer(...)
+
+# Called for each message
+work = ->(message, _p, _o) do
+  MsgProcessor.process(message)
+end
+
+# Called each time `work` completes
+done = ->(_m, _p, _o) {}
+
+# Called periodically after work is complete to acknowledge the
+# completed work. Completed offsets are queued and processed every
+# 5 ms by the OffsetManager.
+ack = ->(p, o) do
+  consumer.store_offset(ENV.fetch('TOPIC_NAME'), p, o)
+rescue InvalidOffset => e
+  # On rebalance, RdKafka sets the offset to _INVALID for the consumer
+  # losing that offset. In this scenario InvalidOffset is expected
+  # and we should move on.
+  # TODO: This can probably be more elegantly handled.
+end
+
+# Call if an exception in encountered in `done`. It is important to
+# understand `work` is being called in a sub thread, so the exception
+# will not bubble up.
+error = ->(e, m, p, o) do
+  logger.error "#{e} on #{p} #{o}"
+  @fatal_error = e
+end
+
+max_in_queue = ENV.fetch('MAX_THREAD_QUEUE_SIZE', 25)
+
+work_shaper = WorkShaper::Manager.new(work, done, ack, error, max_in_queue)
+
+@value_to_subkey = {}
+max_sub_keys = ENV.fetch('MAX_SUB_KEYS', 100)
+consumer.each_message do |message|
+  break if @fatal_error
+  
+  sub_key = @value_to_subkey[message.payload['some attribute']] ||=
+    MurmurHash3::V32.str_hash(message.payload['some attribute']) % max_sub_keys
+
+  work_shaper.enqueue(
+    sub_key,
+    message,
+    message.partition,
+    message.offset
+  )
+end
+```
+
 
 ## Development
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
-
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and the created tag, and push the `.gem` file to [rubygems.org](https://rubygems.org).
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/work_shaper.
+Bug reports and pull requests are welcome on GitHub at https://github.com/broadvoice/work-shaper.
 
 ## License
 
