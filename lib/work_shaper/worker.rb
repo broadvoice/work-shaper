@@ -44,7 +44,7 @@ module WorkShaper
 
     def shutdown
       # Cannot call logger from trap{}
-      puts 'Shutting down'
+      WorkShaper.logger.info({message: 'Shutting down worker'})
       @thread_pool.shutdown
       @thread_pool.wait_for_termination
       sleep 0.05 while @thread_pool.queue_length.positive?
