@@ -1,7 +1,6 @@
 module WorkShaper
   # The worker that runs the stuff
   class Worker
-    include LoggerFactory
     # rubocop:disable Metrics/ParameterLists
     # rubocop:disable Layout/LineLength
     # @param work [Lambda] Lambda that we will #call(message) to execute work.

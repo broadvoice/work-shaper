@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative "work_shaper/version"
+require_relative "work_shaper/manager"
+require_relative "work_shaper/worker"
 
 # WorkShaper is inspired by Kafka partitions and offsets, but could be used to organize and
 # parallelize other forms of work. The original goal was to parallelize processing offsets in
