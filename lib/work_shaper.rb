@@ -3,6 +3,7 @@
 require_relative "work_shaper/version"
 require_relative "work_shaper/manager"
 require_relative "work_shaper/worker"
+require 'json'
 
 # WorkShaper is inspired by Kafka partitions and offsets, but could be used to organize and
 # parallelize other forms of work. The original goal was to parallelize processing offsets in
@@ -18,12 +19,25 @@ module WorkShaper
   def self.logger=(logger)
     @logger = logger
   end
+
   def self.logger
     @logger ||= Logger.new(
       $stdout,
       level: ENV['LOG_LEVEL'] || 'DEBUG',
-      formatter: Ruby::JSONFormatter::Base.new
+      formatter: formatter
     )
+  end
+
+  def self.formatter
+    proc do |severity, datetime, _progname, msg|
+      datefmt = datetime.strftime('%Y-%m-%dT%H:%M:%S.%6N')
+      {
+        timestamp: datefmt,
+        level: severity.ljust(5),
+        pid: Process.pid,
+        msg: msg
+      }.to_json + "\n"
+    end
   end
 end
 
