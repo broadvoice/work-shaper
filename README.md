@@ -60,7 +60,13 @@ end
 
 max_in_queue = ENV.fetch('MAX_THREAD_QUEUE_SIZE', 25)
 
-work_shaper = WorkShaper::Manager.new(work, done, ack, error, max_in_queue)
+work_shaper = WorkShaper::Manager.new(
+  work: work, 
+  on_done: done, 
+  ack: ack, 
+  on_error: error, 
+  max_in_queue: max_in_queue
+)
 
 @value_to_subkey = {}
 max_sub_keys = ENV.fetch('MAX_SUB_KEYS', 100)
