@@ -155,11 +155,11 @@ module WorkShaper
                 received: @received_offsets[partition].to_a[0..10].join(',')
               })
           else
-            @total_acked += 1
             @last_ack[partition] = offset
           end
         end
 
+        @total_acked += 1
         completed.delete(offset)
         received.delete(offset)
 
