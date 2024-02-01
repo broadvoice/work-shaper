@@ -98,7 +98,8 @@ module WorkShaper
             total_acked: @total_acked,
             in_flight: (@total_enqueued.to_i - @total_acked.to_i),
             last_acked_offsets: @last_ack,
-            worker_count: @workers.keys.count
+            worker_count: @workers.keys.count,
+            offset_mgr: @offset_manager.status
           })
         if detailed
           WorkShaper.logger.info(

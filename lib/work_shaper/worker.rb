@@ -27,16 +27,14 @@ module WorkShaper
       @thread_pool.post do
         @work.call(message, partition, offset)
         @on_done.call(message, partition, offset)
+      rescue => e
+        WorkShaper.logger.error("Error processing #{partition}:#{offset} #{e}")
+        WorkShaper.logger.error(e.backtrace.join(" > "))
+        @on_error.call(e, message, partition, offset)
+      ensure
         @semaphore.synchronize do
           (@completed_offsets[partition] ||= SortedSet.new) << offset
         end
-        # @ack_handler.call(partition, offset)
-      rescue => e
-        puts("Error processing #{partition}:#{offset} #{e}")
-        puts(e.backtrace.join("\n"))
-        # logger.error("Acking it anyways, why not?")
-        @on_error.call(e, message, partition, offset)
-        # @ack_handler.call(partition, offset)
       end
       # rubocop:enable Style/RescueStandardError
     end
