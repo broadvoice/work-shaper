@@ -175,11 +175,7 @@ module WorkShaper
 
     def pause_on_overrun
       overrun = lambda do
-        completed = @completed_offsets.values.flatten.count
-        received = @received_offsets.values.flatten.count
-
         @total_enqueued.to_i - @total_acked.to_i > @max_in_queue
-        received - completed > @max_in_queue
       end
 
       # We have to be careful here to avoid a deadlock. Another thread may be waiting
