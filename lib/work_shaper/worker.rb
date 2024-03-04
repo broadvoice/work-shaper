@@ -33,7 +33,8 @@ module WorkShaper
         @on_error.call(e, message, partition, offset)
       ensure
         @semaphore.synchronize do
-          (@completed_offsets[partition] ||= SortedSet.new) << offset
+          WorkShaper.logger.debug "Completed: #{partition}:#{offset}"
+          (@completed_offsets[partition] ||= Array.new) << offset
         end
       end
       # rubocop:enable Style/RescueStandardError

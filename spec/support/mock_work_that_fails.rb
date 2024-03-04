@@ -1,5 +1,5 @@
 class MockWorkThatFails
-  attr_reader :acked, :errored
+  attr_reader :acked, :acked_count, :errored
 
   def work_sleep_ms
     5
@@ -12,6 +12,9 @@ class MockWorkThatFails
   def on_done(_message, _partition, _offset) end
 
   def on_ack(_partition, _offset)
+    @acked_count ||= 0
+    @acked_count += 1
+    puts "on_ack: #{@acked_count}"
     @acked = true
   end
 

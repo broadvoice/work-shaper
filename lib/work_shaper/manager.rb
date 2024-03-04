@@ -3,6 +3,8 @@ module WorkShaper
   # for each offset in monotonically increasing order (independent of the execution order), and gracefully
   # cleaning up when `#shutdown` is called.
   class Manager
+    attr_reader :total_acked, :total_enqueued
+
     # Several of the parameters here are Lambdas (not Proc). Note you can pass a method using
     # `method(:some_method)` or a lambda directly `->{ puts 'Hello'}`.
     #
@@ -29,6 +31,7 @@ module WorkShaper
       @shutdown = false
 
       @total_enqueued = 0
+      @total_acked = 0
 
       @heartbeat = Thread.new do
         while true
@@ -57,11 +60,12 @@ module WorkShaper
     def enqueue(sub_key, message, partition, offset)
       raise StandardError, 'Shutting down' if @shutdown
       pause_on_overrun
+      WorkShaper.logger.debug "Enqueue: #{sub_key}:#{partition}:#{offset}"
 
       worker = nil
       @semaphore.synchronize do
         @total_enqueued += 1
-        (@received_offsets[partition] ||= SortedSet.new) << offset
+        (@received_offsets[partition] ||= Array.new) << offset
 
         worker =
           @workers[sub_key] ||=
@@ -130,13 +134,11 @@ module WorkShaper
     end
 
     def offset_ack_unsafe(partition)
-      @total_acked ||= 0
-
       completed = @completed_offsets[partition]
       received = @received_offsets[partition]
 
-      offset = completed.first
-      while received.any? && received.first == offset
+      offset = completed.sort.first
+      while received.any? && received.sort.first == offset
         # We observed Kafka sending the same message twice, even after
         # having committed the offset. Here we skip this offset if we
         # know it has already been committed.
@@ -161,8 +163,11 @@ module WorkShaper
         end
 
         @total_acked += 1
-        completed.delete(offset)
-        received.delete(offset)
+        WorkShaper.logger.debug "@total_acked: #{@total_acked}"
+        WorkShaper.logger.debug "completed: [#{completed.join(', ')}]"
+        WorkShaper.logger.debug "received: [#{received.join(', ')}]"
+        completed.shift
+        received.shift
 
         offset = completed.first
       end
@@ -170,7 +175,11 @@ module WorkShaper
 
     def pause_on_overrun
       overrun = lambda do
+        completed = @completed_offsets.values.flatten.count
+        received = @received_offsets.values.flatten.count
+
         @total_enqueued.to_i - @total_acked.to_i > @max_in_queue
+        received - completed > @max_in_queue
       end
 
       # We have to be careful here to avoid a deadlock. Another thread may be waiting
