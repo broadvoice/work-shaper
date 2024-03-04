@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'logger'
-require 'sorted_set'
 require 'concurrent-ruby'
 require_relative "work_shaper/version"
 require_relative "work_shaper/manager"
