@@ -3,6 +3,7 @@
 require 'logger'
 require 'concurrent-ruby'
 require_relative "work_shaper/version"
+require_relative "work_shaper/offset_holder"
 require_relative "work_shaper/manager"
 require_relative "work_shaper/worker"
 require 'json'

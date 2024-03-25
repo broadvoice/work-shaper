@@ -3,7 +3,7 @@ module WorkShaper
   # for each offset in monotonically increasing order (independent of the execution order), and gracefully
   # cleaning up when `#shutdown` is called.
   class Manager
-    attr_reader :total_acked, :total_enqueued
+    attr_reader :total_acked, :total_enqueued, :shutting_down
 
     # Several of the parameters here are Lambdas (not Proc). Note you can pass a method using
     # `method(:some_method)` or a lambda directly `->{ puts 'Hello'}`.
@@ -28,14 +28,14 @@ module WorkShaper
       @completed_offsets = {}
       @max_in_queue = max_in_queue
       @semaphore = Mutex.new
-      @shutdown = false
+      @shutting_down = false
 
       @total_enqueued = 0
       @total_acked = 0
 
       @heartbeat = Thread.new do
         while true
-          report
+          report(detailed: true)
           sleep heartbeat_period_sec
         end
       rescue => e
@@ -58,14 +58,16 @@ module WorkShaper
 
     # Enqueue a message to be worked on the given `sub_key`, `partition`, and `offset`.
     def enqueue(sub_key, message, partition, offset)
-      raise StandardError, 'Shutting down' if @shutdown
+      raise StandardError, 'Shutting down' if @shutting_down
       pause_on_overrun
-      WorkShaper.logger.debug "Enqueue: #{sub_key}:#{partition}:#{offset}"
+
+      offset_holder = OffsetHolder.new(partition, offset)
+      WorkShaper.logger.debug "Enqueue: #{sub_key}/#{offset_holder}"
 
       worker = nil
       @semaphore.synchronize do
         @total_enqueued += 1
-        (@received_offsets[partition] ||= Array.new) << offset
+        (@received_offsets[partition] ||= Array.new) << offset_holder
 
         worker =
           @workers[sub_key] ||=
@@ -81,7 +83,7 @@ module WorkShaper
             )
       end
 
-      worker.enqueue(message, partition, offset)
+      worker.enqueue(message, offset_holder)
     end
 
     # Flush any offsets for which work has been completed. Only lowest continuous run of
@@ -108,7 +110,7 @@ module WorkShaper
         if detailed
           WorkShaper.logger.info(
             {
-              messaage: 'Reporting - Extra Detail',
+              message: 'Reporting - Extra Detail',
               pending_ack: @completed_offsets,
               received_offsets: @received_offsets
             })
@@ -118,10 +120,11 @@ module WorkShaper
 
     # Stop the underlying threads
     def shutdown
-      @shutdown = true
-      report(detailed: true)
+      @shutting_down = true
+      WorkShaper.logger.warn({ message: 'Shutting Down' })
       Thread.kill(@heartbeat)
       Thread.kill(@offset_manager)
+      report(detailed: true)
       @workers.each_value(&:shutdown)
     end
 
@@ -134,23 +137,38 @@ module WorkShaper
     end
 
     def offset_ack_unsafe(partition)
-      completed = @completed_offsets[partition]
-      received = @received_offsets[partition]
+      completed = @completed_offsets[partition].sort!
+      received = @received_offsets[partition].sort!
 
-      offset = completed.sort.first
-      while received.any? && received.sort.first == offset
-        # We observed Kafka sending the same message twice, even after
-        # having committed the offset. Here we skip this offset if we
-        # know it has already been committed.
-        last_offset = @last_ack[partition]
-        if last_offset && offset <= last_offset
-          WorkShaper.logger.warn(
-            { message: 'Received Dupilcate Offset',
-              offset: "#{partition}:#{offset}"
-            })
-        else
-          result = @ack.call(partition, offset)
-          if result.is_a? Exception
+      begin
+        offset = completed.first
+        while received.any? && received.first == offset
+          # We observed Kafka sending the same message twice, even after
+          # having committed the offset. Here we skip this offset if we
+          # know it has already been committed.
+          last_offset = @last_ack[partition]
+          if last_offset && offset <= last_offset
+            WorkShaper.logger.warn(
+              { message: 'Received Duplicate Offset',
+                offset: "#{partition}:#{offset}",
+                last_acked: last_offset,
+              })
+          end
+
+          result =
+            begin
+              @ack.call(partition, offset.to_i)
+            rescue => e
+              # We expect @ack to handle it's own errors and return the error or false if it
+              # is safe to continue. Otherwise @ack should raise an error and we will
+              # shutdown.
+              WorkShaper.logger.error({ message: 'Error in ack', error: e })
+              WorkShaper.logger.error(e.backtrace.join("\n"))
+              shutdown
+              break
+            end
+
+          if result.is_a? Exception || !result
             WorkShaper.logger.warn(
               { message: 'Failed to Ack Offset, likely re-balance',
                 offset: "#{partition}:#{offset}",
@@ -158,18 +176,21 @@ module WorkShaper
                 received: @received_offsets[partition].to_a[0..10].join(',')
               })
           else
-            @last_ack[partition] = offset
+            @last_ack[partition] = [@last_ack[partition] || offset, offset].max
           end
+
+          @total_acked += 1
+          WorkShaper.logger.debug "@total_acked: #{@total_acked}"
+          WorkShaper.logger.debug "completed: [#{completed.join(', ')}]"
+          WorkShaper.logger.debug "received: [#{received.join(', ')}]"
+          completed.delete(offset)
+          received.delete(offset)
+
+          offset = completed.first
         end
-
-        @total_acked += 1
-        WorkShaper.logger.debug "@total_acked: #{@total_acked}"
-        WorkShaper.logger.debug "completed: [#{completed.join(', ')}]"
-        WorkShaper.logger.debug "received: [#{received.join(', ')}]"
-        completed.shift
-        received.shift
-
-        offset = completed.first
+      rescue => e
+        WorkShaper.logger.error({ message: 'Error in offset_ack', error: e })
+        WorkShaper.logger.error(e.backtrace.join("\n"))
       end
     end
 
@@ -178,11 +199,19 @@ module WorkShaper
         @total_enqueued.to_i - @total_acked.to_i > @max_in_queue
       end
 
+      pause_cycles = 0
       # We have to be careful here to avoid a deadlock. Another thread may be waiting
       # for the mutex to ack and remove offsets. If we wrap enqueue in a synchronize
       # block, that would lead to a deadlock. Here the sleep allows other threads
       # to wrap up.
-      sleep 0.005 while @semaphore.synchronize { overrun.call }
+      while @semaphore.synchronize { overrun.call } do
+        if pause_cycles % 12000 == 0
+          WorkShaper.logger.warn 'Paused on Overrun'
+          report(detailed: true)
+        end
+        pause_cycles += 1
+        sleep 0.005
+      end
     end
   end
 end

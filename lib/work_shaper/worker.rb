@@ -22,7 +22,10 @@ module WorkShaper
     # rubocop:enable Metrics/ParameterLists
     # rubocop:enable Layout/LineLength
 
-    def enqueue(message, partition, offset)
+    def enqueue(message, offset_holder)
+      partition = offset_holder.partition
+      offset = offset_holder.offset
+
       # rubocop:disable Style/RescueStandardError
       @thread_pool.post do
         @work.call(message, partition, offset)
@@ -34,7 +37,8 @@ module WorkShaper
       ensure
         @semaphore.synchronize do
           WorkShaper.logger.debug "Completed: #{partition}:#{offset}"
-          (@completed_offsets[partition] ||= Array.new) << offset
+          offset_holder.complete!
+          (@completed_offsets[partition] ||= Array.new) << offset_holder
         end
       end
       # rubocop:enable Style/RescueStandardError

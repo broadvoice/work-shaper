@@ -14,3 +14,5 @@ gem "rubocop", "~> 1.21"
 gem "logger", "~> 1.4"
 
 gem "concurrent-ruby", "~> 1.2"
+
+gem 'simplecov', require: false, group: :test
