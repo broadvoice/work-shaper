@@ -79,23 +79,5 @@ RSpec.describe WorkShaper do
       expect(work_shaper.total_enqueued).to be 100
       subject.report
     end
-
-    it "should only ack matching offset reference" do
-      work_shaper = subject
-      o1 = WorkShaper::OffsetHolder.new(0, 0)
-      o2 = WorkShaper::OffsetHolder.new(0, 0)
-
-      completed_offsets = { 0 => [o1] }
-      received_offsets = { 0 => [o2] }
-
-      work_shaper.set_instance_variable(:@completed_offsets, completed_offsets)
-      work_shaper.set_instance_variable(:@received_offsets, received_offsets)
-
-      work_shaper.send(:offset_ack_unsafe, 0)
-
-      put completed_offsets
-      puts received_offsets
-
-    end
   end
 end

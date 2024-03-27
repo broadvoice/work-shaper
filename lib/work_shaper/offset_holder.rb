@@ -43,6 +43,10 @@ module WorkShaper
       @state = :completed
     end
 
+    def completed?
+      @state == :completed
+    end
+
     def to_i
       offset
     end

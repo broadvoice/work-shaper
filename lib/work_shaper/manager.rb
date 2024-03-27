@@ -25,7 +25,6 @@ module WorkShaper
       @workers = {}
       @last_ack = {}
       @received_offsets = {}
-      @completed_offsets = {}
       @max_in_queue = max_in_queue
       @semaphore = Mutex.new
       @shutting_down = false
@@ -45,7 +44,7 @@ module WorkShaper
 
       @offset_manager = Thread.new do
         while true
-          @completed_offsets.each_key do |partition|
+          @received_offsets.each_key do |partition|
             offset_ack(partition)
           end
           sleep offset_commit_period_ms / 1000.0
@@ -77,7 +76,6 @@ module WorkShaper
               method(:offset_ack),
               @on_error,
               @last_ack,
-              @completed_offsets,
               @semaphore,
               @max_in_queue
             )
@@ -91,7 +89,7 @@ module WorkShaper
     # the consumer restarts.
     def flush(safe: true)
       sleep 5
-      @completed_offsets.each_key do |k|
+      @received_offsets.each_key do |k|
         safe ? offset_ack(k) : offset_ack_unsafe(k)
       end
     end
@@ -137,12 +135,11 @@ module WorkShaper
     end
 
     def offset_ack_unsafe(partition)
-      completed = @completed_offsets[partition].sort!
       received = @received_offsets[partition].sort!
 
       begin
-        offset = completed.first
-        while received.any? && received.first == offset
+        offset = received.first
+        while offset && offset.completed?
           # We observed Kafka sending the same message twice, even after
           # having committed the offset. Here we skip this offset if we
           # know it has already been committed.
@@ -172,7 +169,6 @@ module WorkShaper
             WorkShaper.logger.warn(
               { message: 'Failed to Ack Offset, likely re-balance',
                 offset: "#{partition}:#{offset}",
-                completed: @completed_offsets[partition].to_a[0..10].join(','),
                 received: @received_offsets[partition].to_a[0..10].join(',')
               })
           else
@@ -181,12 +177,10 @@ module WorkShaper
 
           @total_acked += 1
           WorkShaper.logger.debug "@total_acked: #{@total_acked}"
-          WorkShaper.logger.debug "completed: [#{completed.join(', ')}]"
           WorkShaper.logger.debug "received: [#{received.join(', ')}]"
-          completed.delete(offset)
           received.delete(offset)
 
-          offset = completed.first
+          offset = received.first
         end
       rescue => e
         WorkShaper.logger.error({ message: 'Error in offset_ack', error: e })
@@ -196,6 +190,8 @@ module WorkShaper
 
     def pause_on_overrun
       overrun = lambda do
+        # I think we can do this now with the refactor
+        # @received_offsets.values.count > @max_in_queue
         @total_enqueued.to_i - @total_acked.to_i > @max_in_queue
       end
 
