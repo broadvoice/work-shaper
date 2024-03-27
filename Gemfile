@@ -11,8 +11,8 @@ gem "rspec", "~> 3.0"
 
 gem "rubocop", "~> 1.21"
 
-gem "sorted_set", "~> 1.0"
-
 gem "logger", "~> 1.4"
 
 gem "concurrent-ruby", "~> 1.2"
+
+gem 'simplecov', require: false, group: :test
